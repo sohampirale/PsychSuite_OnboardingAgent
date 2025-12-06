@@ -38,8 +38,23 @@ from pipecat.processors.filters.stt_mute_filter import STTMuteFilter, STTMuteCon
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage, ToolMessage, SystemMessage,HumanMessage,AIMessage
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
-
+from mongoengine import Document, StringField, ListField,IntField,LongField,connect
 load_dotenv()
+
+connect(
+    db="PsychSuite",
+    host=os.getenv('MONGODB_URI')
+)
+
+class Patient(Document):
+    name = StringField(required=True)
+    phone = LongField(required=True)
+    email = StringField(required=True)
+    patientConnectReason=StringField(required=True)
+    age = IntField(required=False)
+    city = StringField(required=True)
+    meta = {"strict": False}
+
 
 llm_temp  = ChatGoogleGenerativeAI(
     model="gemini-2.0-flash",
@@ -75,34 +90,55 @@ stt_mute_filter = STTMuteFilter(
     )
 )
 
-#  For Hindi
+#  For English transcript
 live_options = LiveOptions(
      model="nova-2",
-     language=Language.EN,  # Hindi
+     language=Language.EN, 
 )
 
-async def send_email(args:FlowArgs,flow_manager:FlowManager)->tuple[str,NodeConfig]:
-    """Sends email to requested user
+async def create_new_patient(args:FlowArgs,flow_manager:FlowManager)->tuple[str,NodeConfig]:
+    """Create DB entry for a new patient 
 
     args={
-        'user_request':'clear explaination of the users request regarding sending email'
+        'name':'Name of the patient',
+        'email'(optional):'email of the person',
+        'phone'(optional):'phone no of the person, 
+        'patientConnectReason':'Reason why they have contacted us',
+        'age':'their age',
+        'city':'city they are from'
     }
 
     """
-    state.is_important=True
-    await flow_manager.task.queue_frame( 
-      TTSSpeakFrame("Email sent to the requested user")
-    )
+    print('----Inside create_new_patient args : ',args)
 
-    return "email sent successfully",None
+    try:
+        valid_fields = Patient._fields.keys()
+        clean_args = {k: v for k, v in args.items() if k in valid_fields}
+    
+        p = Patient(**clean_args)
+        p.save()
+        
+        print('DB Updated successfully')
+    except Exception as e :
+        print('ERROR :: create_new_patient :: ',e)
+        return e,None
 
+    return "DB updated successfully",None
 
-send_email_tool=FlowsFunctionSchema(
-    name="send_email_tool",
-    description="Sends email to requested user",
-    required=['user_request'],
-    handler=send_email,
-    properties={'user_request':{'type':'string'}}
+create_new_patient_tool=FlowsFunctionSchema(
+    name="create_new_patient",
+    description="Creates DB entry for a new patient",
+    required=['name','email','phone','patientConnectReason'],
+    handler=create_new_patient,
+    properties={
+            'user_request':{'type':'string'},
+            'name':{'type':'string'},
+            'email':{'type':'string'},
+            'phone':{'type':'number'},
+            'patientConnectReason':{'type':'string'},
+            'age':{'type':'number'},
+            'city':{'type':'string'}
+        }
 )
 
 transport_params = {
@@ -176,7 +212,7 @@ def create_node1()->NodeConfig:
                 "content": "Start the conversation by saying hello to the user",
             }
         ],
-        "functions": []
+        "functions": [create_new_patient_tool]
     }
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
@@ -188,25 +224,28 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         live_options=live_options,
     )
 
-    tts = ElevenLabsTTSService(
-        api_key=os.getenv("ELEVENLABS_API_KEY"),
-        text_filters=[MarkdownTextFilter()],
-    )
+    #tts = ElevenLabsTTSService(
+    #    api_key=os.getenv("ELEVENLABS_API_KEY"),
+    #    #voice_id="PIGsltMj3gFMR34aFDI3",
+    #    voice_id="wXvR48IpOq9HACltTmt7",
+    #    text_filters=[MarkdownTextFilter()],
+    #)
 
     tts = CartesiaTTSService(
        api_key=os.getenv("CARTESIA_API_KEY"),
-       voice_id="fd2ada67-c2d9-4afe-b474-6386b87d8fc3",
-       voice_id="92d0ba9f-b798-4895-8a68-12b558903b8d",
+    #   voice_id="fd2ada67-c2d9-4afe-b474-6386b87d8fc3",
+   #    voice_id="92d0ba9f-b798-4895-8a68-12b558903b8d",
+        voice_id="228fca29-3a0a-435c-8728-5cb483251068",
        text_filters=[MarkdownTextFilter()],
     )
     # llm = GoogleLLMService(api_key=os.getenv("GOOGLE_API_KEY"), model="gemini-1.5-flash-8b")
-    # llm = GoogleLLMService(api_key=os.getenv("GOOGLE_API_KEY"), model="gemini-2.0-flash-lite")
+    llm = GoogleLLMService(api_key=os.getenv("GOOGLE_API_KEY"), model="gemini-2.0-flash-lite")
     
-    llm = OpenAILLMService(
-        api_key=os.getenv("COHERE_API_KEY"),
-        base_url="https://api.cohere.ai/v1",  
-        model="command-r-plus" 
-    )
+    #llm = OpenAILLMService(
+    #    api_key=os.getenv("COHERE_API_KEY"),
+    #    base_url="https://api.cohere.ai/v1",  
+    #    model="command-r-plus-08-2024" 
+    #)
 
     context = LLMContext()
     context_aggregator = LLMContextAggregatorPair(context)
@@ -235,7 +274,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        logger.info(f"Client connected")
+        #logger.info(f"Client connected")
+        print('Connected!')
         # Kick off the conversation.
         await flow_manager.initialize(create_node1())
 
